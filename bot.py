@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import random
 import requests
 import logging
 import feedparser
@@ -25,14 +26,14 @@ def carregar_postados():
         log.error(f"Erro ao ler {POSTED_FILE}: {e}")
         return []
 
-def salvar_postado(post_id, postados):
-    postados.append(post_id)
-    if len(postados) > 200:
-        postados = postados[-200:]
+def salvar_postado(post_id, postados_list):
+    if post_id not in postados_list:
+        postados_list.append(post_id)
+    # Removido o limite de 200 para garantir que NUNCA repita publicações
     try:
         with open(POSTED_FILE, "w", encoding="utf-8") as f:
-            json.dump(postados, f, indent=2)
-        log.info(f"ID {post_id} salvo no histórico.")
+            json.dump(postados_list, f, indent=2)
+        log.info(f"ID {post_id} salvo no histórico permanente.")
     except Exception as e:
         log.error(f"Erro ao salvar {POSTED_FILE}: {e}")
 
@@ -75,81 +76,115 @@ def publicar_imagem(page_id, token, caminho_imagem, mensagem):
         log.error(f"Erro na requisição de publicação de imagem: {e}")
         return False
 
+def extrair_midia(post):
+    media_url = None
+    tipo_midia = None
+    
+    if hasattr(post, 'media_thumbnail') and len(post.media_thumbnail) > 0:
+        media_url = post.media_thumbnail[0]['url']
+        tipo_midia = "image"
+        
+    if not media_url and hasattr(post, 'content'):
+        for c in post.content:
+            match = re.search(r'img src="([^"]+)"', c.value)
+            if match:
+                media_url = match.group(1).replace('&amp;', '&')
+                tipo_midia = "image"
+                break
+                
+    return media_url, tipo_midia
+
 def buscar_e_postar():
     if not FB_PAGE_ID or not FB_TOKEN:
         log.error("Credenciais do Facebook não configuradas.")
         return
 
-    postados = carregar_postados()
-    url_reddit = "https://www.reddit.com/r/ComidasBR/new.rss"
+    postados_list = carregar_postados()
+    postados_set = set(postados_list)
     
     feedparser.USER_AGENT = "BotReceitasFacebook/1.0"
-    log.info("Buscando posts recentes via RSS usando feedparser...")
-    feed = feedparser.parse(url_reddit)
     
-    if getattr(feed, 'status', 0) == 429:
-        log.error("Rate limit (429) atingido no Reddit. O IP atual está temporariamente bloqueado. Tente novamente mais tarde.")
-        sys.exit(1)
+    feeds_para_tentar = [
+        "https://www.reddit.com/r/ComidasBR/new.rss",
+        "https://www.reddit.com/r/ComidasBR/hot.rss",
+        "https://www.reddit.com/r/ComidasBR/top.rss?t=month",
+        "https://www.reddit.com/r/ComidasBR/top.rss?t=all",
+        "https://www.reddit.com/r/ComidasBR/top.rss?t=year"
+    ]
+    
+    post_escolhido = None
+    
+    for idx, url_reddit in enumerate(feeds_para_tentar):
+        log.info(f"Buscando posts via RSS: {url_reddit}")
+        feed = feedparser.parse(url_reddit)
         
-    if not feed.entries:
-        log.warning("Nenhum post encontrado ou erro ao acessar o feed.")
-        sys.exit(1)
-
-    for post in feed.entries:
-        post_id = post.id
-        
-        if post_id in postados:
+        if getattr(feed, 'status', 0) == 429:
+            log.warning(f"Rate limit (429) no feed {url_reddit}.")
+            time.sleep(2)
             continue
             
-        titulo = post.title
-        mensagem_final = f"{titulo}".strip()
-        
-        media_url = None
-        tipo_midia = None
-        
-        if hasattr(post, 'media_thumbnail') and len(post.media_thumbnail) > 0:
-            media_url = post.media_thumbnail[0]['url']
-            tipo_midia = "image"
-            
-        if not media_url and hasattr(post, 'content'):
-            for c in post.content:
-                match = re.search(r'img src="([^"]+)"', c.value)
-                if match:
-                    media_url = match.group(1).replace('&amp;', '&')
-                    tipo_midia = "image"
-                    break
-        
-        if not media_url:
-            log.info(f"Post {post_id} ignorado (sem imagem encontrada).")
-            salvar_postado(post_id, postados)
+        if not feed.entries:
+            log.warning(f"Nenhum post retornado em {url_reddit}.")
             continue
             
-        log.info(f"Mídia encontrada: {media_url} (Tipo: {tipo_midia})")
-        
-        try:
-            log.info("Baixando mídia...")
-            r_media = requests.get(media_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-            r_media.raise_for_status()
-            
-            caminho_local = "temp_media.jpg"
-            with open(caminho_local, "wb") as f:
-                f.write(r_media.content)
-            log.info("Download concluído.")
-        except Exception as e:
-            log.error(f"Erro ao baixar imagem: {e}")
-            continue
-
-        sucesso = False
-        if tipo_midia == "image":
-            caminho_limpo = limpar_metadados_imagem(caminho_local)
-            sucesso = publicar_imagem(FB_PAGE_ID, FB_TOKEN, caminho_limpo, mensagem_final)
-            
-        if sucesso:
-            salvar_postado(post_id, postados)
-            log.info("Postagem finalizada! O bot enviou para o Facebook com sucesso.")
-            sys.exit(0)
+        candidatos = []
+        for post in feed.entries:
+            if post.id in postados_set:
+                continue
+                
+            media_url, tipo_midia = extrair_midia(post)
+            if media_url:
+                candidatos.append((post, media_url, tipo_midia))
+                
+        if candidatos:
+            if idx == 0:
+                # Se for o 'new', pega o primeiro da lista (o mais recente de todos)
+                post_escolhido = candidatos[0]
+                log.info(f"Encontrado {len(candidatos)} posts novos nunca postados. Pegando o mais recente.")
+            else:
+                # Se for fallback (hot, top), pega um aleatório dos que nunca foram postados
+                post_escolhido = random.choice(candidatos)
+                log.info(f"Fallback: Encontrado {len(candidatos)} posts antigos nunca postados. Escolhido um aleatório.")
+            break
         else:
-            log.error("Falha ao publicar. Tentando o próximo post...")
+            log.info(f"Nenhum post inédito e com imagem encontrado no feed {url_reddit}.")
+            time.sleep(2)
+            
+    if not post_escolhido:
+        log.error("Todos os feeds foram checados e TODOS os posts já foram postados ou não possuem imagens suportadas. Aguarde novos posts no Reddit.")
+        sys.exit(1)
+        
+    post, media_url, tipo_midia = post_escolhido
+    post_id = post.id
+    titulo = post.title
+    mensagem_final = f"{titulo}".strip()
+    
+    log.info(f"Iniciando download da mídia escolhida: {media_url} (Post ID: {post_id})")
+    
+    try:
+        r_media = requests.get(media_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        r_media.raise_for_status()
+        
+        caminho_local = "temp_media.jpg"
+        with open(caminho_local, "wb") as f:
+            f.write(r_media.content)
+        log.info("Download concluído.")
+    except Exception as e:
+        log.error(f"Erro ao baixar imagem: {e}")
+        sys.exit(1)
+
+    sucesso = False
+    if tipo_midia == "image":
+        caminho_limpo = limpar_metadados_imagem(caminho_local)
+        sucesso = publicar_imagem(FB_PAGE_ID, FB_TOKEN, caminho_limpo, mensagem_final)
+        
+    if sucesso:
+        salvar_postado(post_id, postados_list)
+        log.info("Postagem finalizada com sucesso e salva no histórico permanente.")
+        sys.exit(0)
+    else:
+        log.error("Falha na etapa de publicação na API do Facebook.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     buscar_e_postar()
