@@ -136,7 +136,11 @@ def buscar_e_postar():
     feedparser.USER_AGENT = "BotReceitasFacebook/1.0"
     
     feeds_para_tentar = [
-        "https://www.reddit.com/r/ItHadToBeBrazil/new.rss", # FORCING A SUBREDDIT WITH VIDEOS FOR TESTING
+        "https://www.reddit.com/r/ComidasBR/new.rss",
+        "https://www.reddit.com/r/ComidasBR/hot.rss",
+        "https://www.reddit.com/r/ComidasBR/top.rss?t=month",
+        "https://www.reddit.com/r/ComidasBR/top.rss?t=all",
+        "https://www.reddit.com/r/ComidasBR/top.rss?t=year"
     ]
     
     post_escolhido = None
@@ -160,17 +164,22 @@ def buscar_e_postar():
                 continue
                 
             media_url, tipo_midia = extrair_midia(post)
-            # FORCE TEST TO FIND A VIDEO
-            if media_url and tipo_midia == "video":
+            if media_url:
                 candidatos.append((post, media_url, tipo_midia))
                 
         if candidatos:
-            post_escolhido = candidatos[0]
-            log.info(f"Encontrado um VÍDEO inédito: {post_escolhido[0].title}")
+            if idx == 0:
+                # Se for o 'new', pega o primeiro da lista (o mais recente de todos)
+                post_escolhido = candidatos[0]
+                log.info(f"Encontrado {len(candidatos)} posts novos nunca postados. Pegando o mais recente.")
+            else:
+                # Se for fallback (hot, top), pega um aleatório dos que nunca foram postados
+                post_escolhido = random.choice(candidatos)
+                log.info(f"Fallback: Encontrado {len(candidatos)} posts antigos nunca postados. Escolhido um aleatório.")
             break
             
     if not post_escolhido:
-        log.error("Nenhum VÍDEO novo encontrado para o teste.")
+        log.error("Nenhum VÍDEO ou IMAGEM novo encontrado para o teste.")
         sys.exit(1)
         
     post, media_url, tipo_midia = post_escolhido
