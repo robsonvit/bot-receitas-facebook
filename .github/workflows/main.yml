@@ -1,7 +1,10 @@
 name: Bot Reddit para Facebook
 
 on:
-  workflow_dispatch: # Permite execução manual ou via Google Apps Script
+  workflow_dispatch:
+  push:
+    branches:
+      - main # Permite execução manual ou via Google Apps Script
 
 permissions:
   contents: write # Permite que o bot faça commit de volta (salvar o posted.json)
