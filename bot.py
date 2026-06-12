@@ -233,6 +233,20 @@ def buscar_e_postar():
                 
             sucesso = publicar_video(FB_PAGE_ID, FB_TOKEN, caminho_local, mensagem_final)
             
+        elif tipo_midia == "image":
+            caminho_local = "temp_image.jpg"
+            log.info("Baixando imagem...")
+            img_res = requests.get(media_url)
+            if img_res.status_code == 200:
+                with open(caminho_local, "wb") as f:
+                    f.write(img_res.content)
+                log.info("Imagem baixada com sucesso.")
+                caminho_limpo = limpar_metadados_imagem(caminho_local)
+                sucesso = publicar_imagem(FB_PAGE_ID, FB_TOKEN, caminho_limpo, mensagem_final)
+            else:
+                log.error(f"Erro ao baixar imagem. Status: {img_res.status_code}")
+                sys.exit(1)
+                
     except Exception as e:
         log.error(f"Erro no fluxo de video: {e}")
         sys.exit(1)
