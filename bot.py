@@ -7,6 +7,7 @@ import requests
 import logging
 import feedparser
 import re
+import subprocess
 from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -29,7 +30,6 @@ def carregar_postados():
 def salvar_postado(post_id, postados_list):
     if post_id not in postados_list:
         postados_list.append(post_id)
-    # Removido o limite de 200 para garantir que NUNCA repita publicações
     try:
         with open(POSTED_FILE, "w", encoding="utf-8") as f:
             json.dump(postados_list, f, indent=2)
@@ -76,14 +76,45 @@ def publicar_imagem(page_id, token, caminho_imagem, mensagem):
         log.error(f"Erro na requisição de publicação de imagem: {e}")
         return False
 
+def publicar_video(page_id, token, caminho_video, mensagem):
+    log.info("Iniciando publicação de VÍDEO no Facebook...")
+    url = f"https://graph.facebook.com/v22.0/{page_id}/videos"
+    payload = {
+        "description": mensagem,
+        "access_token": token
+    }
+    try:
+        with open(caminho_video, "rb") as f:
+            res = requests.post(url, data=payload, files={"source": f}, timeout=180).json()
+            
+        if res.get("id"):
+            log.info(f"✅ Vídeo publicado com sucesso! Video ID: {res.get('id')}")
+            return True
+        else:
+            log.error(f"❌ Erro ao publicar vídeo: {res}")
+            return False
+    except Exception as e:
+        log.error(f"Erro na requisição de publicação de vídeo: {e}")
+        return False
+
 def extrair_midia(post):
     media_url = None
     tipo_midia = None
     
+    # 1. Verifica se tem link de video do Reddit no HTML
+    if hasattr(post, 'content'):
+        for c in post.content:
+            if 'v.redd.it' in c.value or 'youtube.com' in c.value or 'youtu.be' in c.value:
+                tipo_midia = "video"
+                media_url = post.link # Usamos a URL do post pro yt-dlp resolver
+                return media_url, tipo_midia
+    
+    # 2. Thumbnail de imagem
     if hasattr(post, 'media_thumbnail') and len(post.media_thumbnail) > 0:
         media_url = post.media_thumbnail[0]['url']
         tipo_midia = "image"
         
+    # 3. Tag img no conteudo
     if not media_url and hasattr(post, 'content'):
         for c in post.content:
             match = re.search(r'img src="([^"]+)"', c.value)
@@ -105,11 +136,7 @@ def buscar_e_postar():
     feedparser.USER_AGENT = "BotReceitasFacebook/1.0"
     
     feeds_para_tentar = [
-        "https://www.reddit.com/r/ComidasBR/new.rss",
-        "https://www.reddit.com/r/ComidasBR/hot.rss",
-        "https://www.reddit.com/r/ComidasBR/top.rss?t=month",
-        "https://www.reddit.com/r/ComidasBR/top.rss?t=all",
-        "https://www.reddit.com/r/ComidasBR/top.rss?t=year"
+        "https://www.reddit.com/r/ItHadToBeBrazil/new.rss", # FORCING A SUBREDDIT WITH VIDEOS FOR TESTING
     ]
     
     post_escolhido = None
@@ -133,25 +160,17 @@ def buscar_e_postar():
                 continue
                 
             media_url, tipo_midia = extrair_midia(post)
-            if media_url:
+            # FORCE TEST TO FIND A VIDEO
+            if media_url and tipo_midia == "video":
                 candidatos.append((post, media_url, tipo_midia))
                 
         if candidatos:
-            if idx == 0:
-                # Se for o 'new', pega o primeiro da lista (o mais recente de todos)
-                post_escolhido = candidatos[0]
-                log.info(f"Encontrado {len(candidatos)} posts novos nunca postados. Pegando o mais recente.")
-            else:
-                # Se for fallback (hot, top), pega um aleatório dos que nunca foram postados
-                post_escolhido = random.choice(candidatos)
-                log.info(f"Fallback: Encontrado {len(candidatos)} posts antigos nunca postados. Escolhido um aleatório.")
+            post_escolhido = candidatos[0]
+            log.info(f"Encontrado um VÍDEO inédito: {post_escolhido[0].title}")
             break
-        else:
-            log.info(f"Nenhum post inédito e com imagem encontrado no feed {url_reddit}.")
-            time.sleep(2)
             
     if not post_escolhido:
-        log.error("Todos os feeds foram checados e TODOS os posts já foram postados ou não possuem imagens suportadas. Aguarde novos posts no Reddit.")
+        log.error("Nenhum VÍDEO novo encontrado para o teste.")
         sys.exit(1)
         
     post, media_url, tipo_midia = post_escolhido
@@ -159,31 +178,61 @@ def buscar_e_postar():
     titulo = post.title
     mensagem_final = f"{titulo}".strip()
     
-    log.info(f"Iniciando download da mídia escolhida: {media_url} (Post ID: {post_id})")
+    log.info(f"Iniciando download da mídia: {media_url} (Tipo: {tipo_midia})")
+    
+    sucesso = False
     
     try:
-        r_media = requests.get(media_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-        r_media.raise_for_status()
-        
-        caminho_local = "temp_media.jpg"
-        with open(caminho_local, "wb") as f:
-            f.write(r_media.content)
-        log.info("Download concluído.")
+        if tipo_midia == "video":
+            caminho_local = "temp_video.mp4"
+            log.info("Baixando vídeo via yt-dlp...")
+            cmd = [
+                "yt-dlp",
+                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "-o", caminho_local,
+                media_url
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                log.error(f"yt-dlp falhou: {res.stderr}")
+                
+                # FALLBACK RAPIDSAVE
+                log.info("Tentando Fallback via RapidSave...")
+                rs_url = f"https://rapidsave.com/info?url={media_url}"
+                headers = {"User-Agent": "Mozilla/5.0"}
+                rs_html = requests.get(rs_url, headers=headers).text
+                
+                # tenta extrair o link direto
+                match = re.search(r'href="(https://[^"]+\.mp4[^"]*)"', rs_html)
+                if not match:
+                    match = re.search(r'href="(https://sd\.rapidsave\.com/download\.php[^"]*)"', rs_html)
+                
+                if match:
+                    from urllib.parse import unquote
+                    download_url = unquote(match.group(1).replace('&amp;', '&'))
+                    log.info(f"Link RapidSave encontrado: {download_url}")
+                    vid_res = requests.get(download_url, headers=headers)
+                    with open(caminho_local, "wb") as f:
+                        f.write(vid_res.content)
+                    log.info("Vídeo baixado via RapidSave!")
+                else:
+                    log.error("RapidSave falhou.")
+                    sys.exit(1)
+            else:
+                log.info("Download yt-dlp concluído com sucesso.")
+                
+            sucesso = publicar_video(FB_PAGE_ID, FB_TOKEN, caminho_local, mensagem_final)
+            
     except Exception as e:
-        log.error(f"Erro ao baixar imagem: {e}")
+        log.error(f"Erro no fluxo de video: {e}")
         sys.exit(1)
 
-    sucesso = False
-    if tipo_midia == "image":
-        caminho_limpo = limpar_metadados_imagem(caminho_local)
-        sucesso = publicar_imagem(FB_PAGE_ID, FB_TOKEN, caminho_limpo, mensagem_final)
-        
     if sucesso:
         salvar_postado(post_id, postados_list)
-        log.info("Postagem finalizada com sucesso e salva no histórico permanente.")
+        log.info("Postagem finalizada com sucesso!")
         sys.exit(0)
     else:
-        log.error("Falha na etapa de publicação na API do Facebook.")
         sys.exit(1)
 
 if __name__ == "__main__":
