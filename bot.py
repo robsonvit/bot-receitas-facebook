@@ -55,6 +55,24 @@ def limpar_metadados_imagem(caminho_imagem):
         log.error(f"Erro ao limpar metadados da imagem: {e}")
         return caminho_imagem
 
+def limpar_metadados_video(caminho_video):
+    try:
+        caminho_limpo = "clean_video.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-i", caminho_video,
+            "-map_metadata", "-1", "-c:v", "copy", "-c:a", "copy", caminho_limpo
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode == 0:
+            log.info("Metadados do vídeo removidos com sucesso.")
+            return caminho_limpo
+        else:
+            log.warning(f"Falha ao limpar metadados do vídeo. Usando original. Erro: {res.stderr}")
+            return caminho_video
+    except Exception as e:
+        log.error(f"Erro ao limpar metadados do vídeo: {e}")
+        return caminho_video
+
 def publicar_imagem(page_id, token, caminho_imagem, mensagem):
     log.info("Iniciando publicação de IMAGEM no Facebook...")
     url = f"https://graph.facebook.com/v22.0/{page_id}/photos"
@@ -231,7 +249,8 @@ def buscar_e_postar():
             else:
                 log.info("Download yt-dlp concluído com sucesso.")
                 
-            sucesso = publicar_video(FB_PAGE_ID, FB_TOKEN, caminho_local, mensagem_final)
+            caminho_limpo = limpar_metadados_video(caminho_local)
+            sucesso = publicar_video(FB_PAGE_ID, FB_TOKEN, caminho_limpo, mensagem_final)
             
         elif tipo_midia == "image":
             caminho_local = "temp_image.jpg"
