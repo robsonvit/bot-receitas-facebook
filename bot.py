@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import requests
@@ -109,7 +110,7 @@ def buscar_e_postar():
     
     url_reddit = "https://www.reddit.com/r/ComidasBR/new.json?limit=15"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Bot:ReceitasFacebookBot:v1.0.0 (by /u/robsonvit)"
     }
     
     log.info("Buscando posts recentes no r/ComidasBR...")
@@ -119,7 +120,7 @@ def buscar_e_postar():
         dados = req.json()
     except Exception as e:
         log.error(f"Erro ao acessar Reddit: {e}")
-        return
+        sys.exit(1)
 
     posts = dados.get("data", {}).get("children", [])
     
