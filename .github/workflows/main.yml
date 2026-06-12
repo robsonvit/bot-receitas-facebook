@@ -42,4 +42,5 @@ jobs:
           git config --local user.name "GitHub Action Bot"
           git add posted.json
           git commit -m "chore: atualiza histórico de postagens [skip ci]" || echo "Nenhuma mudança no histórico"
+          git pull --rebase
           git push
